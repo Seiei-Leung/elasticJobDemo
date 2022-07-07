@@ -1,0 +1,82 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<beans xmlns="http://www.springframework.org/schema/beans"
+       xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+       xmlns:reg="http://www.dangdang.com/schema/ddframe/reg"
+       xmlns:job="http://www.dangdang.com/schema/ddframe/job"
+       xmlns:context="http://www.springframework.org/schema/context"
+       xsi:schemaLocation="http://www.springframework.org/schema/beans
+                        http://www.springframework.org/schema/beans/spring-beans.xsd
+                        http://www.dangdang.com/schema/ddframe/reg
+                        http://www.dangdang.com/schema/ddframe/reg/reg.xsd
+                        http://www.dangdang.com/schema/ddframe/job
+                        http://www.dangdang.com/schema/ddframe/job/job.xsd http://www.springframework.org/schema/context https://www.springframework.org/schema/context/spring-context.xsd">
+
+    <!-- 官网 https://shardingsphere.apache.org/elasticjob/legacy/lite-2.x/01-start/quick-start/ -->
+    <!--配置作业注册中心 -->
+    <!--
+        id：连接Zookeeper服务器的列表，包括IP地址和端口号，多个地址用逗号分隔
+        namespace：Zookeeper的命名空间
+        base-sleep-time-milliseconds：等待重试的间隔时间的初始值
+        max-sleep-time-milliseconds：等待重试的间隔时间的最大值
+        max-retries：最大重试次数
+    -->
+    <reg:zookeeper id="regCenter" server-lists="192.168.212.128:2181" namespace="myZookeeperRegCenter" base-sleep-time-milliseconds="1000" max-sleep-time-milliseconds="3000" max-retries="3" />
+
+    <!-- 配置作业-->
+    <!--
+        class：作业实现类，需实现ElasticJob接口
+        registry-center-ref：注册中心Bean的引用，需引用reg:zookeeper的声明
+        cron：cron表达式，用于控制作业触发时间
+        sharding-total-count：作业分片总数
+        sharding-item-parameters：分片序列号和参数用等号分隔，多个键值对用逗号分隔
+                                  分片序列号从0开始，不可大于或等于作业分片总数
+                                  如：0=a,1=b,2=c
+        分片概念，比如说 zookeeper 服务器有3台，而分片设置为3，即每一台服务器执行一个分片任务，
+        假如分片设置为5，即设置了平均分配属性的话，就会有两台服务器执行两个分片任务，一台服务器执行一个分片任务，
+        在编写具体作业逻辑的时候，可以收到一个参数，它包含当前服务器的分片序号，根据这个信息，可以自定义每个分片服务的具体逻辑
+
+        overwrite：本地配置是否可覆盖注册中心配置（服务器zookeeper自身的配置），如果可覆盖，每次启动作业都以本地配置为准
+                   如果之前 overwrite 为 false，那么之前执行程序对应的分片配置会缓存下来，此时如果修改程序的分片配置，重新发布，也不会覆盖注册中心的缓存配置
+        event-trace-rdb-data-source：日志数据库事件溯源配置，配置好数据源后，作业的每一次执行的信息日志都会记录到对应数据库的 job_execution_log 表和 job_status_trace_log 表
+    -->
+    <job:simple id="mySimpleJobDemo"
+                class="top.seiei.simpleJob.MySimpleJob"
+                registry-center-ref="regCenter"
+                cron="0/5 * * * * ? *"
+                sharding-total-count="1"
+                sharding-item-parameters="0=A"
+                overwrite="true"
+                event-trace-rdb-data-source="dataSource">
+        <!-- 作业事件监听 -->
+        <job:listener class="top.seiei.simpleJob.MySimpleJonListener"/>
+    </job:simple>
+
+    <!-- 从 yml 文件读取消息，其实这样从 yml 文件读取消息，还不如创建 application.properties 直接读取 -->
+    <bean id="yamlProperties" class="org.springframework.beans.factory.config.YamlPropertiesFactoryBean">
+        <property name="resources" value="classpath:application.yml"/>
+    </bean>
+    <context:property-placeholder properties-ref="yamlProperties"/>
+
+    <!--
+        配置数据源，application.yml 文件配置的数据源是注解配置数据源，不能直接引用到这里来，这里需要额外配置数据源
+        （注释配置的bean 无法注入到 XML配置中，而 XML配置的 bean 可以注入到 注释配置中）
+     -->
+    <bean id="dataSource" class="com.zaxxer.hikari.HikariDataSource" destroy-method="close">
+        <property name="driverClassName" value="${spring.datasource.driver-class-name}" />
+        <property name="jdbcUrl" value="${spring.datasource.url}" />
+        <property name="username" value="${spring.datasource.username}" />
+        <property name="password" value="${spring.datasource.password}" />
+        <!-- 初始化连接大小 -->
+        <property name="minimumIdle" value="${spring.datasource.hikari.minimum-idle}"></property>
+        <!-- 连接池最大数量 -->
+        <property name="maximumPoolSize" value="${spring.datasource.hikari.maximum-pool-size}"></property>
+        <!-- 获取连接最大等待时间 -->
+        <property name="idleTimeout" value="${spring.datasource.hikari.idle-timeout}"></property>
+        <!-- 当数据库连接池中的连接被创建而长时间不使用的情况下，该连接会自动回收并失效，但客户端并不知道，在进行数据库操作时仍然使用的是无效的数据库连接，这样，就导致客户端程序报“ java.sql.SQLException: Io 异常: Connection reset” 或“java.sql.SQLException 关闭的连接”异常。 -->
+        <!-- 配置后，客户端在使用一个无效的连接时会先对该连接进行测试，如果发现该连接已经无效，则重新从连接池获取有效数据库连接来使用。 -->
+        <!-- https://blog.csdn.net/youngxv/article/details/79492622 -->
+        <!-- https://blog.csdn.net/liweibin_/article/details/18315483 -->
+        <property name="connectionTestQuery" value="select 1"/>
+    </bean>
+
+</beans>
